@@ -1,0 +1,20 @@
+---
+description: Create APIs only inside the Next.js App Router
+alwaysApply: true
+---
+
+# API Routes: App Router Only
+
+All API endpoints must live in the **App Router** under `app/`. Do not use the Pages Router (`pages/api`).
+
+```text
+// ❌ BAD
+pages/api/users.ts
+
+// ✅ GOOD
+app/api/users/route.ts
+```
+
+- Place handlers in `app/api/**/route.ts` (or `route.js`)
+- Export HTTP methods as named exports (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`)
+- Prefer Route Handlers over creating a parallel `pages/` API structure

@@ -1,0 +1,24 @@
+---
+description: Use camelCase for all project variable names
+alwaysApply: true
+---
+
+# Variable Naming: camelCase
+
+All project variables must use **camelCase**.
+
+```typescript
+// ❌ BAD
+const user_name = "Kim";
+const UserAge = 20;
+const user-id = 1;
+
+// ✅ GOOD
+const userName = "Kim";
+const userAge = 20;
+const userId = 1;
+```
+
+- Local variables, parameters, and object keys you define: `camelCase`
+- Do not introduce `snake_case` or `PascalCase` for ordinary variables
+- React components and classes still use `PascalCase` (this rule is for variables, not types/components)
