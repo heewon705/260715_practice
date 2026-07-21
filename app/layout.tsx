@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "서울 지하철 노선도",
-  description: "서울 지하철 주요 노선과 환승역 안내도",
+  title: "서울 랜덤 데이트",
+  description: "서울의 모든 동 중 오늘의 데이트 장소를 무작위로 골라보세요.",
 };
 
 export default function RootLayout({
