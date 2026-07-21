@@ -12,21 +12,6 @@ type SeoulDong = AdmFeature<EmdProperties> & {
   center: [number, number];
 };
 
-type Cafe = {
-  id: number;
-  name: string;
-  detail: string;
-  mapPoint: [number, number];
-};
-
-type OverpassElement = {
-  id: number;
-  lat?: number;
-  lon?: number;
-  center?: { lat: number; lon: number };
-  tags?: Record<string, string>;
-};
-
 const mapWidth = 760;
 const mapHeight = 620;
 const longitudeMin = 126.75;
@@ -67,58 +52,14 @@ function geometryCenter(geometry: MapGeometry): [number, number] {
   ]);
 }
 
-function geometryBounds(geometry: MapGeometry) {
-  const polygons = geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates;
-  const points = polygons.flatMap((polygon) => polygon.flat());
-  return {
-    south: Math.min(...points.map((point) => point[1])),
-    west: Math.min(...points.map((point) => point[0])),
-    north: Math.max(...points.map((point) => point[1])),
-    east: Math.max(...points.map((point) => point[0])),
-  };
-}
-
-function isPointInRing(point: [number, number], ring: number[][]) {
-  let isInside = false;
-  for (let current = 0, previous = ring.length - 1; current < ring.length; previous = current++) {
-    const [currentX, currentY] = ring[current];
-    const [previousX, previousY] = ring[previous];
-    const crossesEdge =
-      currentY > point[1] !== previousY > point[1] &&
-      point[0] < ((previousX - currentX) * (point[1] - currentY)) / (previousY - currentY) + currentX;
-    if (crossesEdge) isInside = !isInside;
-  }
-  return isInside;
-}
-
-function isPointInGeometry(point: [number, number], geometry: MapGeometry) {
-  const polygons = geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates;
-  return polygons.some(
-    (polygon) =>
-      isPointInRing(point, polygon[0]) &&
-      !polygon.slice(1).some((hole) => isPointInRing(point, hole)),
-  );
-}
-
-function cafeScore(tags: Record<string, string>) {
-  return (
-    Number(Boolean(tags.website || tags["contact:website"])) * 3 +
-    Number(Boolean(tags.instagram || tags["contact:instagram"])) * 2 +
-    Number(Boolean(tags.opening_hours)) * 2 +
-    Number(Boolean(tags.brand)) +
-    Number(Boolean(tags["addr:street"]))
-  );
-}
-
 export default function Home() {
   const [dongs, setDongs] = useState<SeoulDong[]>([]);
   const [selectedDong, setSelectedDong] = useState<SeoulDong | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
-  const [isCafePopupOpen, setIsCafePopupOpen] = useState(false);
-  const [cafes, setCafes] = useState<Cafe[]>([]);
-  const [isCafeLoading, setIsCafeLoading] = useState(false);
-  const [cafeError, setCafeError] = useState("");
+  const [hoveredDong, setHoveredDong] = useState<SeoulDong | null>(null);
+  const [isPhotoPopupOpen, setIsPhotoPopupOpen] = useState(false);
+  const [zoomLevel, setZoomLevel] = useState(1);
 
   useEffect(() => {
     async function loadDongs() {
@@ -145,90 +86,14 @@ export default function Home() {
     loadDongs();
   }, []);
 
-  useEffect(() => {
-    if (!selectedDong || !isCafePopupOpen) return;
-    const abortController = new AbortController();
-
-    async function loadCafes() {
-      setCafes([]);
-      setCafeError("");
-      setIsCafeLoading(true);
-
-      try {
-        const bounds = geometryBounds(selectedDong!.geometry);
-        const boundingBox = `${bounds.south},${bounds.west},${bounds.north},${bounds.east}`;
-        const query = `[out:json][timeout:20];(node["amenity"="cafe"]["name"](${boundingBox});way["amenity"="cafe"]["name"](${boundingBox});relation["amenity"="cafe"]["name"](${boundingBox}););out center tags;`;
-        const response = await fetch(
-          `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`,
-          { signal: abortController.signal },
-        );
-        if (!response.ok) throw new Error("Cafe request failed");
-
-        const data = (await response.json()) as { elements: OverpassElement[] };
-        const cafeCandidates = data.elements
-          .map((element) => {
-            const longitude = element.lon ?? element.center?.lon;
-            const latitude = element.lat ?? element.center?.lat;
-            if (
-              longitude === undefined ||
-              latitude === undefined ||
-              !element.tags?.name ||
-              !isPointInGeometry([longitude, latitude], selectedDong!.geometry)
-            ) {
-              return null;
-            }
-            return {
-              id: element.id,
-              name: element.tags.name,
-              detail:
-                element.tags["addr:street"] ??
-                element.tags.cuisine?.replaceAll(";", " · ") ??
-                "카페 · 커피",
-              mapPoint: projectPoint([longitude, latitude]),
-              score: cafeScore(element.tags),
-            };
-          })
-          .filter((cafe): cafe is Cafe & { score: number } => cafe !== null)
-          .sort((firstCafe, secondCafe) => secondCafe.score - firstCafe.score)
-          .slice(0, 5);
-
-        setCafes(
-          cafeCandidates.map((cafe) => ({
-            id: cafe.id,
-            name: cafe.name,
-            detail: cafe.detail,
-            mapPoint: cafe.mapPoint,
-          })),
-        );
-        if (cafeCandidates.length === 0) {
-          setCafeError("이 동네에는 등록된 카페 정보가 아직 없어요.");
-        }
-      } catch (error) {
-        if ((error as Error).name !== "AbortError") {
-          setCafeError("카페 정보를 불러오지 못했어요.");
-        }
-      } finally {
-        if (!abortController.signal.aborted) setIsCafeLoading(false);
-      }
-    }
-
-    loadCafes();
-    return () => abortController.abort();
-  }, [selectedDong, isCafePopupOpen]);
-
   function chooseRandomDong() {
     if (dongs.length === 0) return;
     let nextDong = dongs[Math.floor(Math.random() * dongs.length)];
     if (dongs.length > 1 && nextDong.properties.emdcd === selectedDong?.properties.emdcd) {
       nextDong = dongs[(dongs.indexOf(nextDong) + 1) % dongs.length];
     }
-    setIsCafePopupOpen(false);
+    setIsPhotoPopupOpen(false);
     setSelectedDong(nextDong);
-  }
-
-  function selectDong(dong: SeoulDong) {
-    setIsCafePopupOpen(false);
-    setSelectedDong(dong);
   }
 
   return (
@@ -268,7 +133,7 @@ export default function Home() {
                     서울특별시 {selectedDong.properties.sggnm}
                   </p>
                   <p className="mt-3 text-xs font-semibold text-[#e35d68]">
-                    지도 속 동 이름을 누르면 카페를 볼 수 있어요 →
+                    지도 속 동 이름을 누르면 동네 사진을 볼 수 있어요
                   </p>
                 </div>
               ) : (
@@ -305,8 +170,31 @@ export default function Home() {
         </section>
 
         <section className="relative flex min-h-[560px] items-center justify-center overflow-hidden bg-[#f4f0eb] p-4 sm:p-8">
-          <div className="absolute left-6 top-6 z-10 rounded-full bg-white/80 px-4 py-2 text-[10px] font-bold tracking-[.18em] text-[#2f2927]/45 shadow-sm">
-            지도 면을 클릭해 동네를 선택하세요
+          <div className="absolute left-6 top-6 z-10 rounded-full bg-white/90 px-4 py-2 text-xs font-bold text-[#2f2927]/60 shadow-sm">
+            {hoveredDong
+              ? `${hoveredDong.properties.sggnm} · ${hoveredDong.properties.emdnm}`
+              : "지도에 마우스를 올려 동네를 확인하세요"}
+          </div>
+
+          <div className="absolute right-6 top-6 z-10 flex overflow-hidden rounded-xl bg-white/90 shadow-sm">
+            <button
+              type="button"
+              onClick={() => setZoomLevel((level) => Math.min(2.5, level + 0.25))}
+              disabled={zoomLevel >= 2.5}
+              className="flex h-10 w-10 items-center justify-center border-r border-black/8 text-xl font-bold transition hover:bg-[#ffe5e2] disabled:opacity-30"
+              aria-label="지도 확대"
+            >
+              +
+            </button>
+            <button
+              type="button"
+              onClick={() => setZoomLevel((level) => Math.max(1, level - 0.25))}
+              disabled={zoomLevel <= 1}
+              className="flex h-10 w-10 items-center justify-center text-xl font-bold transition hover:bg-[#ffe5e2] disabled:opacity-30"
+              aria-label="지도 축소"
+            >
+              −
+            </button>
           </div>
 
           {isLoading ? (
@@ -317,80 +205,40 @@ export default function Home() {
           ) : (
             <svg
               viewBox={`0 0 ${mapWidth} ${mapHeight}`}
-              className="h-auto w-full max-w-[760px] drop-shadow-[0_12px_25px_rgba(72,57,51,.12)]"
+              className="h-auto w-full max-w-[760px] drop-shadow-[0_12px_25px_rgba(72,57,51,.12)] transition-transform duration-300"
+              style={{ transform: `scale(${zoomLevel})` }}
               role="img"
               aria-label="서울 행정동 지도"
             >
               {dongs.map((dong) => {
                 const isSelected = dong.properties.emdcd === selectedDong?.properties.emdcd;
+                const isHovered = dong.properties.emdcd === hoveredDong?.properties.emdcd;
                 return (
                   <path
                     key={dong.properties.emdcd ?? `${dong.properties.sggnm}-${dong.properties.emdnm}`}
                     d={dong.mapPath}
-                    fill={isSelected ? "#e35d68" : "#fffdf9"}
+                    fill={isSelected ? "#e35d68" : isHovered ? "#ffe5e2" : "#fffdf9"}
                     stroke={isSelected ? "#c43f4b" : "#d9d0c8"}
                     strokeWidth={isSelected ? 2.4 : 0.8}
-                    className={
-                      isSelected
-                        ? "cursor-pointer animate-pulse"
-                        : "cursor-pointer transition-colors hover:fill-[#ffe5e2]"
-                    }
+                    className={isSelected ? "animate-pulse" : "transition-colors"}
                     vectorEffect="non-scaling-stroke"
-                    onClick={() => selectDong(dong)}
-                  >
-                    <title>{`${dong.properties.sggnm} ${dong.properties.emdnm}`}</title>
-                  </path>
+                    onMouseEnter={() => setHoveredDong(dong)}
+                    onMouseLeave={() => setHoveredDong(null)}
+                  />
                 );
               })}
-
-              {selectedDong &&
-                isCafePopupOpen &&
-                cafes.map((cafe, index) => (
-                  <g key={cafe.id}>
-                    <line
-                      x1={selectedDong.center[0]}
-                      y1={selectedDong.center[1]}
-                      x2={cafe.mapPoint[0]}
-                      y2={cafe.mapPoint[1]}
-                      stroke="#e35d68"
-                      strokeWidth="1.5"
-                      strokeDasharray="5 5"
-                      opacity=".65"
-                      vectorEffect="non-scaling-stroke"
-                    />
-                    <circle
-                      cx={cafe.mapPoint[0]}
-                      cy={cafe.mapPoint[1]}
-                      r="10"
-                      fill="#2f2927"
-                      stroke="#fff"
-                      strokeWidth="3"
-                      vectorEffect="non-scaling-stroke"
-                    />
-                    <text
-                      x={cafe.mapPoint[0]}
-                      y={cafe.mapPoint[1] + 3.5}
-                      fill="#fff"
-                      fontSize="9"
-                      fontWeight="900"
-                      textAnchor="middle"
-                    >
-                      {index + 1}
-                    </text>
-                  </g>
-                ))}
 
               {selectedDong && (
                 <g
                   transform={`translate(${selectedDong.center[0]} ${selectedDong.center[1]})`}
                   role="button"
                   tabIndex={0}
-                  aria-label={`${selectedDong.properties.emdnm} 카페 보기`}
+                  aria-label={`${selectedDong.properties.emdnm} 사진 보기`}
                   className="cursor-pointer outline-none"
-                  onClick={() => setIsCafePopupOpen(true)}
+                  onClick={() => setIsPhotoPopupOpen(true)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
-                      setIsCafePopupOpen(true);
+                      setIsPhotoPopupOpen(true);
                     }
                   }}
                 >
@@ -399,7 +247,7 @@ export default function Home() {
                   <g transform="translate(15 -35)">
                     <rect x="-8" y="-23" width="144" height="42" rx="21" fill="#2f2927" />
                     <text x="64" y="3" fill="white" fontSize="14" fontWeight="800" textAnchor="middle">
-                      {selectedDong.properties.emdnm} ↗
+                      {selectedDong.properties.emdnm}
                     </text>
                   </g>
                 </g>
@@ -407,86 +255,51 @@ export default function Home() {
             </svg>
           )}
 
-          {selectedDong && isCafePopupOpen && (
+          {selectedDong && isPhotoPopupOpen && (
             <div
-              className="absolute inset-0 z-20 flex items-center justify-center bg-[#2f2927]/30 p-5 backdrop-blur-sm"
+              className="absolute inset-0 z-20 flex items-center justify-center bg-[#2f2927]/35 p-5 backdrop-blur-sm"
               role="dialog"
               aria-modal="true"
-              aria-labelledby="cafe-popup-title"
-              onClick={() => setIsCafePopupOpen(false)}
+              aria-labelledby="photo-popup-title"
+              onClick={() => setIsPhotoPopupOpen(false)}
             >
               <div
-                className="w-full max-w-md rounded-[1.75rem] bg-[#fffdf9] p-6 shadow-2xl sm:p-8"
+                className="w-full max-w-lg overflow-hidden rounded-[1.75rem] bg-[#fffdf9] shadow-2xl"
                 onClick={(event) => event.stopPropagation()}
               >
-                <div className="mb-6 flex items-start justify-between gap-4">
+                <div
+                  className="h-72 bg-cover bg-center"
+                  style={{
+                    backgroundImage:
+                      "url('https://images.unsplash.com/photo-1517154421773-0529f29ea451?auto=format&fit=crop&w=1200&q=85')",
+                  }}
+                  role="img"
+                  aria-label={`${selectedDong.properties.emdnm} 분위기 사진`}
+                />
+                <div className="flex items-center justify-between gap-4 p-6">
                   <div>
-                    <p className="mb-1 text-[10px] font-bold tracking-[.18em] text-[#e35d68]">
-                      CAFE PICKS
+                    <p className="text-[10px] font-bold tracking-[.18em] text-[#e35d68]">
+                      TODAY&apos;S NEIGHBORHOOD
                     </p>
-                    <h2 id="cafe-popup-title" className="text-2xl font-black tracking-[-.05em]">
-                      {selectedDong.properties.emdnm} 카페
+                    <h2 id="photo-popup-title" className="mt-1 text-2xl font-black tracking-[-.05em]">
+                      {selectedDong.properties.sggnm} {selectedDong.properties.emdnm}
                     </h2>
-                    <p className="mt-1 text-xs text-[#2f2927]/40">
-                      지도 등록 정보가 풍부한 순서예요
-                    </p>
                   </div>
                   <button
                     type="button"
-                    onClick={() => setIsCafePopupOpen(false)}
-                    className="flex h-9 w-9 items-center justify-center rounded-full bg-[#2f2927]/6 text-lg transition hover:bg-[#2f2927] hover:text-white"
-                    aria-label="카페 팝업 닫기"
+                    onClick={() => setIsPhotoPopupOpen(false)}
+                    className="flex h-10 w-10 items-center justify-center rounded-full bg-[#2f2927]/6 text-xl transition hover:bg-[#2f2927] hover:text-white"
+                    aria-label="사진 팝업 닫기"
                   >
                     ×
                   </button>
                 </div>
-
-                {isCafeLoading ? (
-                  <div className="flex min-h-44 flex-col items-center justify-center gap-3 text-xs text-[#2f2927]/40">
-                    <span className="h-7 w-7 animate-spin rounded-full border-2 border-[#e35d68]/20 border-t-[#e35d68]" />
-                    동네 카페를 찾고 있어요
-                  </div>
-                ) : cafes.length > 0 ? (
-                  <ol className="divide-y divide-[#2f2927]/8 border-y border-[#2f2927]/8">
-                    {cafes.map((cafe, index) => (
-                      <li key={cafe.id}>
-                        <a
-                          href={`https://map.naver.com/p/search/${encodeURIComponent(`${selectedDong.properties.emdnm} ${cafe.name}`)}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="group flex items-center gap-3 py-3"
-                        >
-                          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#ffe5e2] text-[10px] font-black text-[#e35d68]">
-                            {index + 1}
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-sm font-bold group-hover:text-[#e35d68]">
-                              {cafe.name}
-                            </span>
-                            <span className="block truncate text-[11px] text-[#2f2927]/38">
-                              {cafe.detail}
-                            </span>
-                          </span>
-                          <span className="text-[#2f2927]/25 group-hover:text-[#e35d68]">→</span>
-                        </a>
-                      </li>
-                    ))}
-                  </ol>
-                ) : (
-                  <p className="flex min-h-44 items-center justify-center text-xs text-[#2f2927]/40">
-                    {cafeError}
-                  </p>
-                )}
-
-                <p className="mt-5 text-center text-[10px] text-[#2f2927]/30">
-                  카페 정보 © OpenStreetMap contributors
-                </p>
               </div>
             </div>
           )}
 
           <div className="absolute bottom-6 right-6 text-right text-[10px] leading-4 text-[#2f2927]/35">
-            행정동 경계 기준 · 2026.07
+            행정동 경계 기준 · 2026.07 · {Math.round(zoomLevel * 100)}%
           </div>
         </section>
       </div>

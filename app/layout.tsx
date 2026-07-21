@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "서울 랜덤 데이트",
-  description: "서울의 모든 동 중 오늘의 데이트 장소와 카페를 추천합니다.",
+  description: "서울의 모든 동 중 오늘의 데이트 장소를 무작위로 추천합니다.",
 };
 
 export default function RootLayout({
