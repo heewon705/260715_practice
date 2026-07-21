@@ -12,6 +12,23 @@ type MapGeometry =
   | { type: "Polygon"; coordinates: number[][][] }
   | { type: "MultiPolygon"; coordinates: number[][][][] };
 
+type Cafe = {
+  id: number;
+  name: string;
+  longitude: number;
+  latitude: number;
+  mapPoint: [number, number];
+  detail: string;
+};
+
+type OverpassElement = {
+  id: number;
+  lat?: number;
+  lon?: number;
+  center?: { lat: number; lon: number };
+  tags?: Record<string, string>;
+};
+
 const mapWidth = 760;
 const mapHeight = 620;
 const longitudeMin = 126.75;
@@ -50,11 +67,57 @@ function geometryCenter(geometry: MapGeometry): [number, number] {
   return projectPoint([longitude, latitude]);
 }
 
+function geometryBounds(geometry: MapGeometry) {
+  const polygons = geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates;
+  const points = polygons.flatMap((polygon) => polygon.flat());
+  return {
+    south: Math.min(...points.map((point) => point[1])),
+    west: Math.min(...points.map((point) => point[0])),
+    north: Math.max(...points.map((point) => point[1])),
+    east: Math.max(...points.map((point) => point[0])),
+  };
+}
+
+function isPointInRing(point: [number, number], ring: number[][]) {
+  let isInside = false;
+  for (let current = 0, previous = ring.length - 1; current < ring.length; previous = current++) {
+    const [currentX, currentY] = ring[current];
+    const [previousX, previousY] = ring[previous];
+    const crossesEdge =
+      currentY > point[1] !== previousY > point[1] &&
+      point[0] < ((previousX - currentX) * (point[1] - currentY)) / (previousY - currentY) + currentX;
+    if (crossesEdge) isInside = !isInside;
+  }
+  return isInside;
+}
+
+function isPointInGeometry(point: [number, number], geometry: MapGeometry) {
+  const polygons = geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates;
+  return polygons.some(
+    (polygon) =>
+      isPointInRing(point, polygon[0]) &&
+      !polygon.slice(1).some((hole) => isPointInRing(point, hole)),
+  );
+}
+
+function cafeScore(tags: Record<string, string>) {
+  return (
+    Number(Boolean(tags.website || tags["contact:website"])) * 3 +
+    Number(Boolean(tags.instagram || tags["contact:instagram"])) * 2 +
+    Number(Boolean(tags.opening_hours)) * 2 +
+    Number(Boolean(tags.brand)) +
+    Number(Boolean(tags["addr:street"]))
+  );
+}
+
 export default function Home() {
   const [dongs, setDongs] = useState<SeoulDong[]>([]);
   const [selectedDong, setSelectedDong] = useState<SeoulDong | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
+  const [cafes, setCafes] = useState<Cafe[]>([]);
+  const [isCafeLoading, setIsCafeLoading] = useState(false);
+  const [cafeError, setCafeError] = useState("");
 
   useEffect(() => {
     async function loadDongs() {
@@ -82,6 +145,74 @@ export default function Home() {
 
     loadDongs();
   }, []);
+
+  useEffect(() => {
+    if (!selectedDong) return;
+
+    const abortController = new AbortController();
+
+    async function loadCafes() {
+      setCafes([]);
+      setCafeError("");
+      setIsCafeLoading(true);
+
+      try {
+        const bounds = geometryBounds(selectedDong!.geometry);
+        const boundingBox = `${bounds.south},${bounds.west},${bounds.north},${bounds.east}`;
+        const query = `[out:json][timeout:20];(node["amenity"="cafe"]["name"](${boundingBox});way["amenity"="cafe"]["name"](${boundingBox});relation["amenity"="cafe"]["name"](${boundingBox}););out center tags;`;
+        const response = await fetch(
+          `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`,
+          { signal: abortController.signal },
+        );
+
+        if (!response.ok) throw new Error("Cafe request failed");
+
+        const data = (await response.json()) as { elements: OverpassElement[] };
+        const featuredCafes = data.elements
+          .map((element) => {
+            const longitude = element.lon ?? element.center?.lon;
+            const latitude = element.lat ?? element.center?.lat;
+            if (
+              longitude === undefined ||
+              latitude === undefined ||
+              !element.tags?.name ||
+              !isPointInGeometry([longitude, latitude], selectedDong!.geometry)
+            ) {
+              return null;
+            }
+
+            const tags = element.tags;
+            return {
+              id: element.id,
+              name: tags.name,
+              longitude,
+              latitude,
+              mapPoint: projectPoint([longitude, latitude]),
+              detail: tags["addr:street"] ?? tags.cuisine?.replaceAll(";", " · ") ?? "카페 · 커피",
+              score: cafeScore(tags),
+            };
+          })
+          .filter((cafe): cafe is Cafe & { score: number } => cafe !== null)
+          .sort((firstCafe, secondCafe) => secondCafe.score - firstCafe.score)
+          .slice(0, 5)
+          .map(({ score: _score, ...cafe }) => cafe);
+
+        setCafes(featuredCafes);
+        if (featuredCafes.length === 0) {
+          setCafeError("이 동네에는 등록된 카페 정보가 아직 없어요.");
+        }
+      } catch (error) {
+        if ((error as Error).name !== "AbortError") {
+          setCafeError("카페 정보를 불러오지 못했어요.");
+        }
+      } finally {
+        if (!abortController.signal.aborted) setIsCafeLoading(false);
+      }
+    }
+
+    loadCafes();
+    return () => abortController.abort();
+  }, [selectedDong]);
 
   function chooseRandomDong() {
     if (dongs.length === 0) return;
@@ -136,6 +267,53 @@ export default function Home() {
               )}
             </div>
 
+            {selectedDong && (
+              <div className="mb-6 border-t border-[#2f2927]/10 pt-5">
+                <div className="mb-3 flex items-end justify-between">
+                  <div>
+                    <p className="text-sm font-black">이 동네 카페</p>
+                    <p className="mt-0.5 text-[10px] text-[#2f2927]/40">지도 등록 정보가 풍부한 순서예요</p>
+                  </div>
+                  {!isCafeLoading && cafes.length > 0 && (
+                    <span className="text-[10px] font-bold text-[#e35d68]">{cafes.length} PLACES</span>
+                  )}
+                </div>
+
+                {isCafeLoading ? (
+                  <div className="flex items-center gap-2 py-5 text-xs text-[#2f2927]/40">
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#e35d68]/20 border-t-[#e35d68]" />
+                    카페를 찾고 있어요
+                  </div>
+                ) : cafes.length > 0 ? (
+                  <ol className="divide-y divide-[#2f2927]/8 border-y border-[#2f2927]/8">
+                    {cafes.map((cafe, index) => (
+                      <li key={cafe.id}>
+                        <a
+                          href={`https://map.naver.com/p/search/${encodeURIComponent(`${selectedDong.properties.emdnm} ${cafe.name}`)}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="group flex items-center gap-3 py-2.5"
+                        >
+                          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#ffe5e2] text-[10px] font-black text-[#e35d68]">
+                            {index + 1}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-xs font-bold group-hover:text-[#e35d68]">
+                              {cafe.name}
+                            </span>
+                            <span className="block truncate text-[10px] text-[#2f2927]/38">{cafe.detail}</span>
+                          </span>
+                          <span className="text-xs text-[#2f2927]/25 transition-transform group-hover:translate-x-1">→</span>
+                        </a>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  <p className="py-4 text-xs text-[#2f2927]/40">{cafeError}</p>
+                )}
+              </div>
+            )}
+
             <button
               type="button"
               onClick={chooseRandomDong}
@@ -186,6 +364,45 @@ export default function Home() {
                 );
               })}
 
+              {selectedDong && cafes.length > 0 && (
+                <g>
+                  {cafes.map((cafe, index) => (
+                    <g key={cafe.id}>
+                      <line
+                        x1={selectedDong.center[0]}
+                        y1={selectedDong.center[1]}
+                        x2={cafe.mapPoint[0]}
+                        y2={cafe.mapPoint[1]}
+                        stroke="#e35d68"
+                        strokeWidth="1.5"
+                        strokeDasharray="5 5"
+                        opacity=".65"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                      <circle
+                        cx={cafe.mapPoint[0]}
+                        cy={cafe.mapPoint[1]}
+                        r="10"
+                        fill="#2f2927"
+                        stroke="#fff"
+                        strokeWidth="3"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                      <text
+                        x={cafe.mapPoint[0]}
+                        y={cafe.mapPoint[1] + 3.5}
+                        fill="#fff"
+                        fontSize="9"
+                        fontWeight="900"
+                        textAnchor="middle"
+                      >
+                        {index + 1}
+                      </text>
+                    </g>
+                  ))}
+                </g>
+              )}
+
               {selectedDong && (
                 <g transform={`translate(${selectedDong.center[0]} ${selectedDong.center[1]})`}>
                   <circle r="24" fill="#e35d68" opacity=".28" className="animate-ping" />
@@ -204,7 +421,7 @@ export default function Home() {
           <div className="absolute bottom-6 right-6 text-right text-[10px] leading-4 text-[#2f2927]/35">
             행정동 경계 기준
             <br />
-            DATA · 2026.07
+            경계 2026.07 · 카페 © OpenStreetMap
           </div>
         </section>
       </div>
