@@ -226,6 +226,11 @@ export default function Home() {
     setSelectedDong(nextDong);
   }
 
+  function selectDong(dong: SeoulDong) {
+    setIsCafePopupOpen(false);
+    setSelectedDong(dong);
+  }
+
   return (
     <main className="relative min-h-screen overflow-hidden bg-[#fff7f3] px-4 py-6 text-[#2f2927] sm:px-8 sm:py-8">
       <div className="pointer-events-none absolute -left-24 -top-24 h-80 w-80 rounded-full bg-[#ffd6d2]/50 blur-3xl" />
@@ -301,7 +306,7 @@ export default function Home() {
 
         <section className="relative flex min-h-[560px] items-center justify-center overflow-hidden bg-[#f4f0eb] p-4 sm:p-8">
           <div className="absolute left-6 top-6 z-10 rounded-full bg-white/80 px-4 py-2 text-[10px] font-bold tracking-[.18em] text-[#2f2927]/45 shadow-sm">
-            SEOUL NEIGHBORHOOD MAP
+            지도 면을 클릭해 동네를 선택하세요
           </div>
 
           {isLoading ? (
@@ -325,9 +330,16 @@ export default function Home() {
                     fill={isSelected ? "#e35d68" : "#fffdf9"}
                     stroke={isSelected ? "#c43f4b" : "#d9d0c8"}
                     strokeWidth={isSelected ? 2.4 : 0.8}
-                    className={isSelected ? "animate-pulse" : ""}
+                    className={
+                      isSelected
+                        ? "cursor-pointer animate-pulse"
+                        : "cursor-pointer transition-colors hover:fill-[#ffe5e2]"
+                    }
                     vectorEffect="non-scaling-stroke"
-                  />
+                    onClick={() => selectDong(dong)}
+                  >
+                    <title>{`${dong.properties.sggnm} ${dong.properties.emdnm}`}</title>
+                  </path>
                 );
               })}
 
